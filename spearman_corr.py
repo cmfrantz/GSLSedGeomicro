@@ -69,6 +69,7 @@ from matplotlib.colors import ListedColormap
 # Define the font type to make exported plots editable in Adobe Illustrator
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
+from fpdf import FPDF
 
 
 ####################
@@ -82,6 +83,7 @@ genes = ['16S','18S']
 max_n_taxa = 30     # Max number of unique taxa to correlate
 max_level = 7       # Max taxonomic level to process
 tax_levels = ['d','p','c','o','f','g','s']
+significance = 0.05 # P-value cutoff for significance
 
 # Variables to plot
 varlist = ['datetime_num','water_depth_atcore','depth_sed','replicate',
@@ -91,7 +93,14 @@ varlist = ['datetime_num','water_depth_atcore','depth_sed','replicate',
            'd13C_org_1sig','percent_orgC','d13C_DIC','d13C_DIC_sd',
            'DIC_conc_M','DIC_mM','DIC_sd','Ca','K','Li','Mg','Na','F','Cl',
            'SO4','Br','NO3','Alk_eqkgw','C4_molkgw','m_CO3_molkgw',
-           'si_calcite','si_aragonite','omega_calcite','omega_aragonite']
+           'si_calcite','si_aragonite','omega_calcite','omega_aragonite',
+           'metab_chemoorganoheterotrophy',
+           'metab_chemoorganoheterotrophy_aerobic_respiration',
+           'metab_chemoorganoheterotrophy_fermentative',
+           'metab_chemoorganophototrophy', 'metab_methanogenesis',
+           'metab_sulfur_reduction', 'metab_sulfate_reduction',
+           'metab_photolithoautotrophy', 'metab_oxygenic_photosynthesis',
+           'metab_unknown']
            
 
 # Colormap to use
@@ -196,6 +205,7 @@ def fileGet(title, directory = os.getcwd(),
 def formatASVTable(ASV_table, tax_levels, max_level=7):
     '''
     Formats an ASV table by breaking down taxonomy into individual columns
+    and normalizing counts to be relative abundance
 
     Parameters
     ----------
@@ -216,6 +226,12 @@ def formatASVTable(ASV_table, tax_levels, max_level=7):
 
     '''
     ASVTable = ASV_table.copy().astype(float).dropna(axis=0)
+    
+    # Normalize the data (to get relative vs. absolute abundances)
+    for column in ASVTable.columns:
+        ASVTable[column] = ASVTable[column].values/ASVTable[column].sum()
+    
+    # Add taxonomy level columns    
     samples = list(ASVTable.columns)
     ASVTable[tax_levels[0:max_level]] = ''
     
@@ -233,6 +249,7 @@ def formatASVTable(ASV_table, tax_levels, max_level=7):
             ASVTable.loc[ASV,tax_levels[i]] = '; '.join(splitlist[:i+1])
         bar.next()
     bar.finish()
+
     
     return ASVTable, samples
         
@@ -433,16 +450,17 @@ if __name__ == '__main__':
     asv_tables = {}
     for gene in genes:
             filename, directory, data = fileGet(
-                'Select ' + gene + ' ASV table', file_type = 'csv')
+                'Select ' + gene + ' ASV table', directory=directory,
+                file_type = 'csv')
             asv_tables[gene] = data
     
     #
-    # BUILD HEATMAPS
+    # BUILD METADATA VS TAXONOMIC ABUNDANCE CORRELATION HEATMAPS
     
     # Generate colormap to use
     cmap = genDivergingCmap(color_set)
     
-    # Loop through each dataset
+    # Loop through each sequencing dataset
     for gene in genes:
         
         print('*******************************************************\n'
@@ -473,8 +491,9 @@ if __name__ == '__main__':
                 ds = ds.iloc[0:max_n_taxa]
                 
             # Calculate Spearman correlation and return significant values
-            print('  Calculating Spearman correlation coefficients')
-            corrtable = buildCorrTable(metadata, ds, varlist, samples)
+            print('  Calculating Spearman correlation coefficients for taxa')
+            corrtable = buildCorrTable(
+                metadata, ds, varlist, samples, significance = significance)
             
             # Build heatmap table to display results of Spearman correlations
             fig, ax = plt.subplots(figsize=(30,10))
@@ -490,5 +509,79 @@ if __name__ == '__main__':
             print('  Saving ' + gene + ' L' + str(l+1) + 'figure...')
             img_filename = 'SpearmanCorrFig_' + gene + '_L' + str(l+1) + '.svg'
             fig.savefig(directory + '\\' + img_filename, transparent = True)
+            
+
+    #
+    # DO METADATA CORRELATION ANALYSIS
+    
+    # CalculateSpearman correlations and return significant values
+    print('  Calculating Spearman correlation coefficients for metadata')
+    corrtable = pd.DataFrame(data = None, index = varlist, columns = varlist)
+    for var1 in varlist:        
+        # Loop through each variable & calculate
+            for var2 in varlist:
+                # Grab the lists of values to correlate
+                var1vals = metadata.loc[samples, var1].to_numpy(dtype=float)
+                var2vals = metadata.loc[samples, var2].to_numpy(dtype=float)
                 
+                #Calculate Spearman coefficient
+                corr, p = spearmanr(var1vals, var2vals, nan_policy='omit')
+                
+                # If p value <= 0.05, add it to the heatmap matrix
+                if p <= significance:
+                    corrtable.loc[var1,var2] = corr
+    corrtable = corrtable.astype(float)
+                    
+    # Build heatmap table to display results of Spearman correlations
+    fig, ax = plt.subplots(figsize=(30,30))
+    im = buildHeatmap(
+        ax, cmap, corrtable, 'Spearman correlation of metadata')
+    texts = annotateHeatmap(im, fontsize = 6)
+    fig.tight_layout()
+    plt.show()
+    # Save plots
+    print('  Saving metadata figure...')
+    fig.savefig(
+        directory + '\\' + 'SpearmanCorrFig_Metadata.svg', transparent = True)
+    fig.savefig(
+        directory + '\\' + 'SpearmanCorrFig_Metadata.pdf', transparent = True)
+    
+    
+    # Build analysis document for each variable
+    print ('  Saving metadata analysis pdf')
+    pdf = FPDF()
+    for var in varlist:
+        # Get and sort the correlating variable list
+        coeffs = corrtable.loc[var].dropna()[1:]
+        coeffs.sort_values(ascending = False, inplace = True)
+        pos = coeffs[coeffs>0]
+        neg = coeffs[coeffs<0].sort_values()
+        
+        # Create a new page & enter results
+        pdf.add_page()
+        pdf.set_font('Arial', size = 12, style = 'B')
+        pdf.cell(200, 10, txt = var, ln=1, align = 'C')
+        pdf.set_font('Arial', size = 12, style = '')
+        pdf.cell(
+            0, 20, txt = (
+                'Spearman correlation coefficients for correlations with ' +
+                'other metadata parameters where p <=' + str(significance)),
+            ln=1, align = 'C')
+        pdf.set_font('Arial', size = 12, style = 'U')
+        pdf.cell(0, 20, txt = 'Positive correlations:', ln=1, align = 'L')
+        for i,p in enumerate(pos):
+            pdf.set_font('Arial', size = 12, style = '')
+            pdf.cell(
+                0, 10,
+                txt = str(round(pos.iloc[i],2)) + '  ' + pos.index[i],
+                ln=1, align = 'L')
+        pdf.set_font('Arial', size = 12, style = 'U')
+        pdf.cell(0,20, txt = 'Negative correlations:', ln=1, align = 'L')
+        for i,n in enumerate(neg):
+            pdf.set_font('Arial', size = 12, style = '')
+            pdf.cell(
+                0, 10,
+                txt = str(round(neg.iloc[i],2)) + '  ' + neg.index[i],
+                ln=1, align = 'L')
+    pdf.output(directory + '\\' + 'SpearmanCorr_Metadata.pdf')
         

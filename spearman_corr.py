@@ -460,6 +460,9 @@ if __name__ == '__main__':
     # Generate colormap to use
     cmap = genDivergingCmap(color_set)
     
+    # Prepare container for tables
+    spearman_tables = {}
+
     # Loop through each sequencing dataset
     for gene in genes:
         
@@ -495,6 +498,9 @@ if __name__ == '__main__':
             corrtable = buildCorrTable(
                 metadata, ds, varlist, samples, significance = significance)
             
+            # Save correlation table
+            spearman_tables[gene+'_L'+str(l+1)] = corrtable
+            
             # Build heatmap table to display results of Spearman correlations
             fig, ax = plt.subplots(figsize=(30,10))
             im = buildHeatmap(
@@ -507,9 +513,13 @@ if __name__ == '__main__':
         
             # Save plots
             print('  Saving ' + gene + ' L' + str(l+1) + 'figure...')
-            img_filename = 'SpearmanCorrFig_' + gene + '_L' + str(l+1) + '.svg'
-            fig.savefig(directory + '\\' + img_filename, transparent = True)
+            img_filename = 'SpearmanCorrFig_' + gene + '_L' + str(l+1)
+            fig.savefig(
+                directory + '\\' + img_filename + '.svg', transparent = True)
+            fig.savefig(
+                directory + '\\' + img_filename + '.pdf', format='pdf')   
             
+              
 
     #
     # DO METADATA CORRELATION ANALYSIS
@@ -531,6 +541,9 @@ if __name__ == '__main__':
                 if p <= significance:
                     corrtable.loc[var1,var2] = corr
     corrtable = corrtable.astype(float)
+    
+    # Save correlation table
+    spearman_tables['metab_metadata'] = corrtable
                     
     # Build heatmap table to display results of Spearman correlations
     fig, ax = plt.subplots(figsize=(30,30))
@@ -544,7 +557,7 @@ if __name__ == '__main__':
     fig.savefig(
         directory + '\\' + 'SpearmanCorrFig_Metadata.svg', transparent = True)
     fig.savefig(
-        directory + '\\' + 'SpearmanCorrFig_Metadata.pdf', transparent = True)
+        directory + '\\' + 'SpearmanCorrFig_Metadata.pdf', format = 'pdf')
     
     
     # Build analysis document for each variable
@@ -584,4 +597,9 @@ if __name__ == '__main__':
                 txt = str(round(neg.iloc[i],2)) + '  ' + neg.index[i],
                 ln=1, align = 'L')
     pdf.output(directory + '\\' + 'SpearmanCorr_Metadata.pdf')
+    
+    # Save and export tables as Excel workbook
+    with pd.ExcelWriter(directory + '\\SpearmanCorrTable.xlsx') as writer:
+        for n, df in enumerate(list(spearman_tables)):
+            spearman_tables[df].to_excel(writer, sheet_name = df)
         
